@@ -4,64 +4,45 @@ import os
 import math
 import json
 from collections import defaultdict
+from datetime import datetime, date, timezone, timedelta
 from dotenv import load_dotenv
+import pandas as pd
 
 load_dotenv()
 
 # ─────────────────────────────────────────────
 # Configuração
 # ─────────────────────────────────────────────
-ML_APP_ID      = os.getenv("ML_APP_ID", "")
-ML_SECRET      = os.getenv("ML_CLIENT_SECRET", "")
-REDIRECT_URI   = os.getenv("ML_REDIRECT_URI", "")
-ML_AUTH_URL    = "https://auth.mercadolivre.com.br/authorization"
-ML_TOKEN_URL   = "https://api.mercadolibre.com/oauth/token"
-ML_API_BASE    = "https://api.mercadolibre.com"
-BOXES_FILE     = "boxes_config.json"
+ML_APP_ID     = os.getenv("ML_APP_ID", "")
+ML_SECRET     = os.getenv("ML_CLIENT_SECRET", "")
+REDIRECT_URI  = os.getenv("ML_REDIRECT_URI", "")
+ML_AUTH_URL   = "https://auth.mercadolivre.com.br/authorization"
+ML_TOKEN_URL  = "https://api.mercadolibre.com/oauth/token"
+ML_API_BASE   = "https://api.mercadolibre.com"
+BOXES_FILE    = "boxes_config.json"
+BR_OFFSET     = timedelta(hours=-3)   # UTC-3 (Brasília)
 
-st.set_page_config(
-    page_title="ML Compras Dashboard",
-    page_icon="🛒",
-    layout="wide",
-)
+st.set_page_config(page_title="ML Compras Dashboard", page_icon="🛒", layout="wide")
 
 # ─────────────────────────────────────────────
-# CSS customizado
+# CSS
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
     .main-header {
         background: linear-gradient(135deg, #FFE600, #FFC107);
-        padding: 18px 24px;
-        border-radius: 12px;
-        margin-bottom: 24px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
+        padding: 18px 24px; border-radius: 12px; margin-bottom: 24px;
     }
     .main-header h1 { margin: 0; font-size: 28px; color: #333; }
     .main-header p  { margin: 0; color: #666; font-size: 13px; }
-    .metric-card {
-        background: #fff;
-        border-radius: 10px;
-        padding: 16px;
-        border-left: 4px solid;
-        box-shadow: 0 1px 4px rgba(0,0,0,.08);
-    }
-    .stDataFrame { border-radius: 10px; overflow: hidden; }
+    .badge-hoje      { background:#ff4b4b; color:#fff; border-radius:6px; padding:2px 8px; font-size:12px; font-weight:700; }
+    .badge-proximos  { background:#1f77b4; color:#fff; border-radius:6px; padding:2px 8px; font-size:12px; font-weight:700; }
     div[data-testid="stButton"] > button {
-        background: #FFE600;
-        color: #333;
-        font-weight: 700;
-        border: 2px solid #e6cf00;
-        border-radius: 8px;
-        padding: 10px 24px;
-        font-size: 15px;
+        background: #FFE600; color: #333; font-weight: 700;
+        border: 2px solid #e6cf00; border-radius: 8px;
+        padding: 8px 20px; font-size: 14px;
     }
-    div[data-testid="stButton"] > button:hover {
-        background: #f0d800;
-        border-color: #c8b400;
-    }
+    div[data-testid="stButton"] > button:hover { background: #f0d800; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -123,54 +104,72 @@ def get_seller_id():
     return resp.json().get("id") if resp.ok else None
 
 
+def get_brazil_today():
+    """Retorna a data de hoje no fuso de Brasília (UTC-3)."""
+    return (datetime.now(timezone.utc) + BR_OFFSET).date()
+
+
+def classify_order(order):
+    """
+    Classifica um pedido como 'hoje' ou 'proximos'.
+    - 'hoje'    → date_closed ANTES de hoje (precisava ter saído ontem ou antes)
+    - 'proximos' → date_closed HOJE (entrou hoje, ainda está dentro do prazo)
+    """
+    today = get_brazil_today()
+    date_str = order.get("date_closed") or order.get("date_created", "")
+    if date_str:
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            order_date = (dt + BR_OFFSET).date()
+            if order_date < today:
+                return "hoje"
+        except Exception:
+            pass
+    return "proximos"
+
+
 def fetch_orders(seller_id):
+    """Busca APENAS pedidos com status ready_to_ship (prontos para enviar)."""
     all_orders = []
-    debug_info = {}
-    for status in ["ready_to_ship", "payment_done", "paid", "handling"]:
-        offset, limit = 0, 50
+    offset, limit = 0, 50
+
+    while True:
         resp = ml_get("/orders/search", {
             "seller": seller_id,
-            "order.status": status,
+            "order.status": "ready_to_ship",
             "limit": limit,
             "offset": offset,
-            "sort": "date_desc",
+            "sort": "date_asc",   # mais antigos primeiro = mais urgentes
         })
-        debug_info[status] = {"status_code": resp.status_code, "body": resp.json()}
         if not resp.ok:
-            continue
-        data    = resp.json()
+            st.session_state["_debug"] = {"status_code": resp.status_code, "body": resp.json()}
+            break
+        data = resp.json()
         results = data.get("results", [])
+        if not results:
+            break
         all_orders.extend(results)
         total  = data.get("paging", {}).get("total", 0)
         offset += limit
-        while offset < total and results:
-            resp = ml_get("/orders/search", {
-                "seller": seller_id,
-                "order.status": status,
-                "limit": limit,
-                "offset": offset,
-            })
-            if not resp.ok:
-                break
-            data    = resp.json()
-            results = data.get("results", [])
-            all_orders.extend(results)
-            total  = data.get("paging", {}).get("total", 0)
-            offset += limit
-    # Guarda debug na sessão
-    st.session_state["_debug"] = debug_info
+        if offset >= total:
+            break
+
     return all_orders
 
 
 def aggregate(orders):
+    """Agrupa por SKU/variação e separa em hoje vs próximos dias."""
     agg = defaultdict(lambda: {
         "Produto": "", "Variação": "", "SKU": "",
         "item_id": "", "variation_id": None,
-        "Pedidos": 0, "Unidades": 0,
+        "hoje_un": 0,    "hoje_ped": 0,
+        "proximos_un": 0, "proximos_ped": 0,
     })
+
     for order in orders:
+        period = classify_order(order)
         for item in order.get("order_items", []):
-            d  = item.get("item", {})
+            d   = item.get("item", {})
             vid = d.get("variation_id")
             key = (d.get("id", ""), vid or "sem")
             attrs = d.get("variation_attributes", [])
@@ -179,19 +178,34 @@ def aggregate(orders):
                 for a in attrs if a.get("value_name")
             ) or "Padrão"
 
-            agg[key]["Produto"]      = d.get("title", "")
-            agg[key]["Variação"]     = var
-            agg[key]["SKU"]          = d.get("seller_sku") or ""
-            agg[key]["item_id"]      = d.get("id", "")
-            agg[key]["variation_id"] = vid
-            agg[key]["Pedidos"]     += 1
-            agg[key]["Unidades"]    += item.get("quantity", 0)
+            agg[key].update({
+                "Produto":      d.get("title", ""),
+                "Variação":     var,
+                "SKU":          d.get("seller_sku") or "",
+                "item_id":      d.get("id", ""),
+                "variation_id": vid,
+            })
 
-    return sorted(agg.values(), key=lambda x: x["Unidades"], reverse=True)
+            qty = item.get("quantity", 0)
+            if period == "hoje":
+                agg[key]["hoje_un"]  += qty
+                agg[key]["hoje_ped"] += 1
+            else:
+                agg[key]["proximos_un"]  += qty
+                agg[key]["proximos_ped"] += 1
+
+    result = []
+    for v in agg.values():
+        v["total_un"]  = v["hoje_un"]  + v["proximos_un"]
+        v["total_ped"] = v["hoje_ped"] + v["proximos_ped"]
+        result.append(v)
+
+    # Ordena: hoje primeiro, depois por total de unidades
+    return sorted(result, key=lambda x: (-(x["hoje_un"]), -(x["total_un"])))
 
 
 # ─────────────────────────────────────────────
-# Configuração de caixas (persistência em arquivo)
+# Caixas — persistência em arquivo JSON
 # ─────────────────────────────────────────────
 
 def load_boxes():
@@ -209,7 +223,7 @@ def save_boxes(config: dict):
 
 
 # ─────────────────────────────────────────────
-# OAuth: captura o code na URL
+# OAuth: captura code na URL
 # ─────────────────────────────────────────────
 
 params = st.query_params
@@ -231,32 +245,28 @@ if "code" in params and "access_token" not in st.session_state:
 
 st.markdown("""
 <div class="main-header">
-  <div>
-    <h1>🛒 ML Compras</h1>
-    <p>Dashboard de reposição de estoque — Mercado Livre</p>
-  </div>
+  <h1>🛒 ML Compras</h1>
+  <p>Dashboard de reposição de estoque — Mercado Livre</p>
 </div>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# TELA DE LOGIN
+# LOGIN
 # ─────────────────────────────────────────────
 
 if "access_token" not in st.session_state:
     st.markdown("### 🔐 Conecte sua conta")
     st.markdown("Clique no botão abaixo para autorizar o acesso aos seus pedidos.")
-
     auth_url = (
-        f"{ML_AUTH_URL}"
-        f"?response_type=code"
+        f"{ML_AUTH_URL}?response_type=code"
         f"&client_id={ML_APP_ID}"
         f"&redirect_uri={REDIRECT_URI}"
     )
-    st.link_button("🛒  Entrar com Mercado Livre", auth_url, use_container_width=False)
+    st.link_button("🛒  Entrar com Mercado Livre", auth_url)
     st.stop()
 
 # ─────────────────────────────────────────────
-# DASHBOARD PRINCIPAL
+# DASHBOARD
 # ─────────────────────────────────────────────
 
 col_title, col_btn = st.columns([6, 1])
@@ -267,96 +277,91 @@ with col_btn:
         del st.session_state["access_token"]
         st.rerun()
 
-def get_data():
-    sid = get_seller_id()
-    if not sid:
-        return None, [], {}
-    orders = fetch_orders(sid)
+with st.spinner("Carregando pedidos..."):
+    seller_id = get_seller_id()
+    if not seller_id:
+        st.error("Não foi possível conectar. Token inválido — faça login novamente.")
+        if st.button("Fazer login novamente"):
+            del st.session_state["access_token"]
+            st.rerun()
+        st.stop()
+
+    orders = fetch_orders(seller_id)
     items  = aggregate(orders)
-    return len(orders), items, st.session_state.get("_debug", {})
 
-total_orders, items, debug = get_data()
+# ─── Totais para os cards ─────────────────────
+hoje_ped     = sum(i["hoje_ped"]     for i in items)
+hoje_un      = sum(i["hoje_un"]      for i in items)
+proximos_ped = sum(i["proximos_ped"] for i in items)
+proximos_un  = sum(i["proximos_un"]  for i in items)
+total_ped    = hoje_ped + proximos_ped
+total_un     = hoje_un  + proximos_un
 
-if total_orders is None:
-    st.error("Não foi possível conectar. Token inválido — faça login novamente.")
-    if st.button("Fazer login novamente"):
-        del st.session_state["access_token"]
-        st.rerun()
+# ─── Cards de resumo ──────────────────────────
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("🔴 Envios de hoje",    f"{hoje_ped} pedidos",    f"{hoje_un} un.")
+c2.metric("🔵 Próximos dias",     f"{proximos_ped} pedidos", f"{proximos_un} un.")
+c3.metric("🏷️ SKUs distintos",   len(items))
+c4.metric("📦 Total de pedidos",  total_ped, f"{total_un} un. no total")
+
+if not items:
+    st.success("✅ Nenhum pedido pendente para enviar no momento.")
     st.stop()
 
-# Cards de resumo
-total_units = sum(i["Unidades"] for i in items)
-c1, c2, c3 = st.columns(3)
-c1.metric("📦 Pedidos a enviar",   total_orders)
-c2.metric("🏷️ Produtos distintos", len(items))
-c3.metric("📊 Total de unidades",  total_units)
-
-# Debug temporário — mostra resposta da API
-if total_orders == 0 and debug:
-    with st.expander("🔍 Diagnóstico da API (remover depois)"):
-        for status, info in debug.items():
-            st.write(f"**{status}** → HTTP {info['status_code']}")
-            st.json(info["body"])
+# ─── Debug se debug existir ───────────────────
+if "_debug" in st.session_state and total_ped == 0:
+    with st.expander("🔍 Diagnóstico da API"):
+        st.json(st.session_state["_debug"])
 
 st.divider()
 
 # ─────────────────────────────────────────────
-# TABELA EDITÁVEL
+# TABELA POR SKU
 # ─────────────────────────────────────────────
 
-st.subheader("Produtos a repor")
-st.caption("Preencha a coluna **Un./Caixa** com quantas unidades vêm em cada caixa. O cálculo é automático.")
+st.subheader("📦 Produtos a enviar por SKU")
+st.caption("🔴 **Hoje** = pedidos antigos que precisam sair agora  |  🔵 **Próximos dias** = pedidos recentes ainda no prazo  |  Preencha **Un./Caixa** para calcular compras.")
 
 boxes_cfg = load_boxes()
 
-# Monta lista de linhas
 rows = []
 for item in items:
-    key = f"{item['item_id']}_{item['variation_id'] or 'sem'}"
-    un_caixa = int(boxes_cfg.get(key, 0)) or None
+    key      = f"{item['item_id']}_{item['variation_id'] or 'sem'}"
+    un_caixa = int(boxes_cfg.get(key, 0))
     rows.append({
-        "Produto":    item["Produto"],
-        "Variação":   item["Variação"],
-        "SKU":        item["SKU"],
-        "Pedidos":    item["Pedidos"],
-        "Unidades":   item["Unidades"],
-        "Un./Caixa":  un_caixa or 0,
-        "_key":       key,
+        "Produto":        item["Produto"],
+        "Variacao":       item["Variação"],
+        "SKU":            item["SKU"],
+        "Hoje":           item["hoje_un"],
+        "Proximos dias":  item["proximos_un"],
+        "Total":          item["total_un"],
+        "Un./Caixa":      un_caixa,
+        "_key":           key,
     })
 
-import pandas as pd
-
-COLS = ["Produto", "Variacao", "SKU", "Pedidos", "Unidades", "Un./Caixa"]
-
-# Renomeia chave com acento para evitar KeyError em algumas versões do pandas
-for r in rows:
-    r["Variacao"] = r.pop("Variação")
-
-df = pd.DataFrame(rows, columns=["Produto", "Variacao", "SKU", "Pedidos", "Unidades", "Un./Caixa", "_key"]) \
-    if rows else pd.DataFrame(columns=["Produto", "Variacao", "SKU", "Pedidos", "Unidades", "Un./Caixa", "_key"])
-
-if df.empty:
-    st.info("✅ Nenhum pedido pendente para enviar no momento.")
-    st.stop()
+df = pd.DataFrame(rows) if rows else pd.DataFrame(
+    columns=["Produto", "Variacao", "SKU", "Hoje", "Proximos dias", "Total", "Un./Caixa", "_key"]
+)
 
 edited = st.data_editor(
-    df[["Produto", "Variacao", "SKU", "Pedidos", "Unidades", "Un./Caixa"]],
+    df[["Produto", "Variacao", "SKU", "Hoje", "Proximos dias", "Total", "Un./Caixa"]],
     use_container_width=True,
     hide_index=True,
     column_config={
-        "Produto":   st.column_config.TextColumn("Produto", width="large", disabled=True),
-        "Variacao":  st.column_config.TextColumn("Variação", disabled=True),
-        "SKU":       st.column_config.TextColumn("SKU", disabled=True),
-        "Pedidos":   st.column_config.NumberColumn("Pedidos", disabled=True),
-        "Unidades":  st.column_config.NumberColumn("Unidades", disabled=True),
-        "Un./Caixa": st.column_config.NumberColumn("Un./Caixa", min_value=0, step=1,
-                                                    help="Quantas unidades vêm por caixa?"),
+        "Produto":       st.column_config.TextColumn("Produto", width="large", disabled=True),
+        "Variacao":      st.column_config.TextColumn("Variação", disabled=True),
+        "SKU":           st.column_config.TextColumn("SKU", disabled=True),
+        "Hoje":          st.column_config.NumberColumn("🔴 Hoje (un.)", disabled=True, width="small"),
+        "Proximos dias": st.column_config.NumberColumn("🔵 Próx. dias (un.)", disabled=True, width="small"),
+        "Total":         st.column_config.NumberColumn("Total (un.)", disabled=True, width="small"),
+        "Un./Caixa":     st.column_config.NumberColumn("Un./Caixa", min_value=0, step=1,
+                                                        help="Quantas unidades vêm por caixa?"),
     },
     num_rows="fixed",
     key="tabela_produtos",
 )
 
-# Salva alterações nas caixas
+# Salva Un./Caixa
 new_boxes = {}
 for i, row in edited.iterrows():
     key = df.at[i, "_key"]
@@ -367,28 +372,31 @@ if new_boxes:
     save_boxes(new_boxes)
 
 # ─────────────────────────────────────────────
-# TABELA DE RESULTADO (cálculo de caixas)
+# RESUMO DE COMPRAS
 # ─────────────────────────────────────────────
 
 st.divider()
-st.subheader("📋 Resumo de compras")
+st.subheader("🛒 Resumo de compras")
 
 resultado = []
 for i, row in edited.iterrows():
     un_caixa = int(row["Un./Caixa"] or 0)
-    unidades = int(row["Unidades"])
+    total    = int(row["Total"])
     if un_caixa > 0:
-        caixas   = math.ceil(unidades / un_caixa)
-        inteiras = unidades // un_caixa
-        resto    = unidades % un_caixa
+        caixas   = math.ceil(total / un_caixa)
+        inteiras = total // un_caixa
+        resto    = total % un_caixa
         detalhe  = f"{inteiras} cx completa(s)" + (f" + {resto} avulsas" if resto else " ✓ exato")
         resultado.append({
-            "Produto":        row["Produto"],
-            "Variação":       row["Variação"],
-            "Unidades":       unidades,
-            "Un./Caixa":      un_caixa,
+            "Produto":          row["Produto"],
+            "Variação":         row["Variacao"],
+            "SKU":              row["SKU"],
+            "🔴 Hoje":          int(row["Hoje"]),
+            "🔵 Próx. dias":    int(row["Proximos dias"]),
+            "Total un.":        total,
+            "Un./Caixa":        un_caixa,
             "Caixas a comprar": caixas,
-            "Detalhe":        detalhe,
+            "Detalhe":          detalhe,
         })
 
 if resultado:
