@@ -1,441 +1,547 @@
 import streamlit as st
 import requests
-import os
-import math
-import json
-from collections import defaultdict
-from datetime import datetime, date, timezone, timedelta
-from dotenv import load_dotenv
-import pandas as pd
+from datetime import datetime, timezone
 
-load_dotenv()
+st.set_page_config(page_title="Painel ML", page_icon="🛒", layout="wide")
 
-# ─────────────────────────────────────────────
-# Configuração
-# ─────────────────────────────────────────────
-ML_APP_ID     = os.getenv("ML_APP_ID", "")
-ML_SECRET     = os.getenv("ML_CLIENT_SECRET", "")
-REDIRECT_URI  = os.getenv("ML_REDIRECT_URI", "")
-ML_AUTH_URL   = "https://auth.mercadolivre.com.br/authorization"
-ML_TOKEN_URL  = "https://api.mercadolibre.com/oauth/token"
-ML_API_BASE   = "https://api.mercadolibre.com"
-BOXES_FILE    = "boxes_config.json"
-BR_OFFSET     = timedelta(hours=-3)   # UTC-3 (Brasília)
-
-st.set_page_config(page_title="ML Compras Dashboard", page_icon="🛒", layout="wide")
-
-# ─────────────────────────────────────────────
-# CSS
-# ─────────────────────────────────────────────
 st.markdown("""
 <style>
-    .main-header {
-        background: linear-gradient(135deg, #FFE600, #FFC107);
-        padding: 18px 24px; border-radius: 12px; margin-bottom: 24px;
-    }
-    .main-header h1 { margin: 0; font-size: 28px; color: #333; }
-    .main-header p  { margin: 0; color: #666; font-size: 13px; }
-    .badge-hoje      { background:#ff4b4b; color:#fff; border-radius:6px; padding:2px 8px; font-size:12px; font-weight:700; }
-    .badge-proximos  { background:#1f77b4; color:#fff; border-radius:6px; padding:2px 8px; font-size:12px; font-weight:700; }
-    div[data-testid="stButton"] > button {
-        background: #FFE600; color: #333; font-weight: 700;
-        border: 2px solid #e6cf00; border-radius: 8px;
-        padding: 8px 20px; font-size: 14px;
-    }
-    div[data-testid="stButton"] > button:hover { background: #f0d800; }
+/* ── Fundo geral escuro ── */
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    background-color: #0d0d0d !important;
+}
+.block-container {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    max-width: 100% !important;
+    background-color: #0d0d0d !important;
+}
+header[data-testid="stHeader"] { display: none; }
+section[data-testid="stSidebar"] { display: none; }
+
+/* ── Textos nativos ── */
+.stApp p, .stApp label, .stApp span, .stApp div { color: #e0e0e0; }
+
+/* ── Selectbox e inputs ── */
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stTextInput"] > div > div > input {
+    background-color: #1e1e1e !important;
+    border: 1px solid #333 !important;
+    color: #f0f0f0 !important;
+    border-radius: 8px !important;
+}
+[data-testid="stSelectbox"] > div > div > div { color: #f0f0f0 !important; }
+[data-testid="stSelectbox"] svg { fill: #FFE600 !important; }
+/* Dropdown popover e lista de itens */
+div[data-baseweb="popover"],
+div[data-baseweb="menu"] {
+    background-color: #1e1e1e !important;
+    border: 1px solid #333 !important;
+}
+div[data-baseweb="popover"] ul,
+div[data-baseweb="menu"] ul { background-color: #1e1e1e !important; }
+div[data-baseweb="popover"] li,
+div[data-baseweb="menu"] li { background-color: #1e1e1e !important; color: #f0f0f0 !important; }
+div[data-baseweb="popover"] li:hover,
+div[data-baseweb="menu"] li:hover { background-color: #2a2a2a !important; }
+div[data-baseweb="popover"] li *,
+div[data-baseweb="menu"] li * { color: #f0f0f0 !important; }
+ul[data-testid="stSelectboxVirtualDropdown"] {
+    background-color: #1e1e1e !important;
+    border: 1px solid #333 !important;
+}
+ul[data-testid="stSelectboxVirtualDropdown"] li { background-color: #1e1e1e !important; }
+ul[data-testid="stSelectboxVirtualDropdown"] li:hover { background-color: #2a2a2a !important; }
+ul[data-testid="stSelectboxVirtualDropdown"] li span,
+ul[data-testid="stSelectboxVirtualDropdown"] li div,
+ul[data-testid="stSelectboxVirtualDropdown"] li p { color: #f0f0f0 !important; }
+
+/* ── Botão Sair ── */
+[data-testid="stButton"] > button {
+    background-color: #1e1e1e !important;
+    color: #FFE600 !important;
+    border: 1px solid #FFE600 !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+}
+[data-testid="stButton"] > button:hover {
+    background-color: #FFE600 !important;
+    color: #0d0d0d !important;
+}
+
+/* ── Mensagens ── */
+.stSuccess { background-color: #0f2a0f !important; color: #4caf50 !important; border: 1px solid #2e7d32 !important; }
+
+/* ── Tabela ── */
+.ml-table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+    background: #1a1a1a; border-radius: 12px; overflow: hidden; border: 1px solid #2e2e2e;
+}
+.ml-table th {
+    padding: 11px 14px; text-align: left; font-weight: 600;
+    font-size: 12px; color: #888; background: #111; border-bottom: 1px solid #2e2e2e;
+}
+.ml-table td {
+    padding: 11px 14px; border-bottom: 1px solid #222;
+    vertical-align: middle; color: #e0e0e0;
+}
+.ml-table tr:last-child td { border-bottom: none; }
+.ml-table tr:hover td { background: #222; }
+.tc { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+
+/* ── Badges ── */
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; }
+.b-active  { background: #0f2a0f; color: #66bb6a; }
+.b-paused  { background: #2a1f00; color: #ffa726; }
+.b-closed  { background: #2a0a0a; color: #ef5350; }
+.b-nosales { background: #2a0a0a; color: #ef5350; }
+.b-sales   { background: #0f2a0f; color: #66bb6a; }
+.b-old     { background: #2a1f00; color: #ffa726; }
+a.ver { color: #FFE600; text-decoration: none; font-size: 12px; }
+a.ver:hover { color: #fff; }
+
+/* ── Login ── */
+.login-box {
+    max-width: 420px; margin: 6rem auto; background: #1a1a1a;
+    border-radius: 16px; border: 1px solid #2e2e2e; padding: 2.5rem; text-align: center;
+}
+.login-box h2 { font-size: 20px; font-weight: 700; margin-bottom: 8px; color: #f0f0f0; }
+.login-box p  { font-size: 13px; color: #888; margin-bottom: 2rem; }
+.btn-login {
+    display: inline-block; background: #FFE600; color: #0d0d0d;
+    font-weight: 700; font-size: 15px; padding: 12px 32px;
+    border-radius: 8px; text-decoration: none; border: none; cursor: pointer;
+}
+.btn-login:hover { background: #e6cf00; }
+
+/* ── Título da seção ── */
+.section-title {
+    font-size: 17px; font-weight: 700; color: #f0f0f0;
+    padding: 1rem 0 0.5rem;
+    border-bottom: 2px solid #FFE600;
+    margin-bottom: 1rem;
+    display: inline-block;
+}
 </style>
 """, unsafe_allow_html=True)
 
+CLIENT_ID     = st.secrets["ML_CLIENT_ID"]
+CLIENT_SECRET = st.secrets["ML_CLIENT_SECRET"]
+REDIRECT_URI  = st.secrets["ML_REDIRECT_URI"]
 
-# ─────────────────────────────────────────────
-# Helpers: token e API
-# ─────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────
+def age_days(date_str):
+    try:
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).days
+    except:
+        return 0
 
-def exchange_code_for_token(code: str):
-    resp = requests.post(
-        ML_TOKEN_URL,
-        data={
-            "grant_type": "authorization_code",
-            "client_id": ML_APP_ID,
-            "client_secret": ML_SECRET,
-            "code": code,
-            "redirect_uri": REDIRECT_URI,
-        },
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    return resp.json() if resp.ok else None
+def fmt_age(days):
+    if days < 30:  return f"{days} dias"
+    if days < 365: return f"{days // 30} meses"
+    return f"{days / 365:.1f} anos"
 
+def fmt_price(p):
+    return f"R$ {p:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def refresh_token():
-    rt = st.session_state.get("refresh_token")
-    if not rt:
-        return False
-    resp = requests.post(
-        ML_TOKEN_URL,
-        data={
-            "grant_type": "refresh_token",
-            "client_id": ML_APP_ID,
-            "client_secret": ML_SECRET,
-            "refresh_token": rt,
-        },
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    if resp.ok:
-        data = resp.json()
-        st.session_state["access_token"]  = data.get("access_token")
-        st.session_state["refresh_token"] = data.get("refresh_token")
-        return True
-    return False
+def status_label(s):
+    return {"active": "ativo", "paused": "pausado", "closed": "fechado"}.get(s, s)
 
+def status_badge(s):
+    cls = {"active": "b-active", "paused": "b-paused", "closed": "b-closed"}.get(s, "b-paused")
+    return f'<span class="badge {cls}">{status_label(s)}</span>'
 
-def ml_get(path, params=None):
-    token = st.session_state.get("access_token", "")
+def sales_badge(n):
+    return f'<span class="badge {"b-nosales" if n == 0 else "b-sales"}">{n}</span>'
+
+def age_badge(days):
+    if days > 365:
+        return f'<span class="badge b-old">{fmt_age(days)}</span>'
+    return fmt_age(days)
+
+SORT_OPTIONS = ["Mais vendidos", "Mais recentes", "Mais antigos", "Maior preço", "Menor preço"]
+
+def sort_data(data, criterion):
+    if criterion == "Mais vendidos":
+        return sorted(data, key=lambda l: l.get("sold_quantity") or 0, reverse=True)
+    elif criterion == "Mais recentes":
+        return sorted(data, key=lambda l: l.get("date_created", ""), reverse=True)
+    elif criterion == "Mais antigos":
+        return sorted(data, key=lambda l: l.get("date_created", ""))
+    elif criterion == "Maior preço":
+        return sorted(data, key=lambda l: l.get("price") or 0, reverse=True)
+    elif criterion == "Menor preço":
+        return sorted(data, key=lambda l: l.get("price") or 0)
+    return data
+
+def exchange_code(code):
+    r = requests.post("https://api.mercadolibre.com/oauth/token", data={
+        "grant_type": "authorization_code",
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": REDIRECT_URI
+    }, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+def refresh_token_fn(refresh_token):
+    r = requests.post("https://api.mercadolibre.com/oauth/token", data={
+        "grant_type": "refresh_token",
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "refresh_token": refresh_token
+    }, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+@st.cache_data(show_spinner=False)
+def load_listings(token):
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{ML_API_BASE}{path}", headers=headers, params=params or {})
-    if resp.status_code == 401:
-        if refresh_token():
-            headers["Authorization"] = f"Bearer {st.session_state['access_token']}"
-            resp = requests.get(f"{ML_API_BASE}{path}", headers=headers, params=params or {})
-    return resp
-
-
-def get_seller_id():
-    resp = ml_get("/users/me")
-    return resp.json().get("id") if resp.ok else None
-
-
-def get_brazil_today():
-    """Retorna a data de hoje no fuso de Brasília (UTC-3)."""
-    return (datetime.now(timezone.utc) + BR_OFFSET).date()
-
-
-def classify_order(order):
-    """
-    Classifica um pedido como 'hoje' ou 'proximos'.
-    - 'hoje'    → date_closed ANTES de hoje (precisava ter saído ontem ou antes)
-    - 'proximos' → date_closed HOJE (entrou hoje, ainda está dentro do prazo)
-    """
-    today = get_brazil_today()
-    date_str = order.get("date_closed") or order.get("date_created", "")
-    if date_str:
-        try:
-            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            order_date = (dt + BR_OFFSET).date()
-            if order_date < today:
-                return "hoje"
-        except Exception:
-            pass
-    return "proximos"
-
-
-def fetch_orders(seller_id):
-    """
-    Busca pedidos pagos dos últimos 60 dias e filtra apenas os
-    que ainda não foram enviados (shipping.status pendente/ready).
-    """
-    all_orders   = []
-    debug_info   = {}
-
-    # Últimos 60 dias (cobre todos os pedidos pendentes de envio)
-    date_from = (datetime.now(timezone.utc) - timedelta(days=60)).strftime(
-        "%Y-%m-%dT00:00:00.000-00:00"
-    )
-
-    offset, limit = 0, 50
-    fetched_raw   = 0
-
+    me = requests.get("https://api.mercadolibre.com/users/me", headers=headers, timeout=15)
+    me.raise_for_status()
+    user_id = me.json()["id"]
+    nickname = me.json().get("nickname", str(user_id))
+    all_ids = []
+    offset = 0
     while True:
-        resp = ml_get("/orders/search", {
-            "seller":                  seller_id,
-            "order.status":            "paid",
-            "order.date_created.from": date_from,
-            "limit":                   limit,
-            "offset":                  offset,
-            "sort":                    "date_desc",
-        })
+        r = requests.get(
+            f"https://api.mercadolibre.com/users/{user_id}/items/search?limit=50&offset={offset}",
+            headers=headers, timeout=15
+        )
+        ids = r.json().get("results", [])
+        all_ids.extend(ids)
+        if len(ids) < 50: break
+        offset += 50
+    listings = []
+    for i in range(0, len(all_ids), 20):
+        chunk = all_ids[i:i+20]
+        r = requests.get(
+            f"https://api.mercadolibre.com/items?ids={','.join(chunk)}"
+            f"&attributes=id,title,status,price,sold_quantity,date_created,permalink",
+            headers=headers, timeout=15
+        )
+        for item in r.json():
+            if item.get("code") == 200 and item.get("body"):
+                listings.append(item["body"])
+    return nickname, listings
 
-        if not resp.ok:
-            debug_info["error"] = {"status_code": resp.status_code, "body": resp.json()}
-            break
+def render_table(data):
+    if not data:
+        st.success("Nenhum anúncio nesta categoria!")
+        return
+    rows_html = ""
+    for l in data:
+        age = age_days(l.get("date_created", ""))
+        title = l.get("title", "").replace('"', '&quot;').replace('<', '&lt;')
+        rows_html += f"""<tr>
+          <td><span class="tc" title="{title}">{title}</span></td>
+          <td>{status_badge(l.get('status', ''))}</td>
+          <td>{sales_badge(l.get('sold_quantity') or 0)}</td>
+          <td>{fmt_price(l.get('price') or 0)}</td>
+          <td>{age_badge(age)}</td>
+          <td><a class="ver" href="{l.get('permalink', '#')}" target="_blank">ver ↗</a></td>
+        </tr>"""
+    st.markdown(f"""
+    <table class="ml-table">
+      <thead><tr><th>Título</th><th>Status</th><th>Vendas</th><th>Preço</th><th>Idade</th><th>Link</th></tr></thead>
+      <tbody>{rows_html}</tbody>
+    </table><br>
+    """, unsafe_allow_html=True)
 
-        data    = resp.json()
-        results = data.get("results", [])
-        total   = data.get("paging", {}).get("total", 0)
-
-        if offset == 0:
-            debug_info["total_paid_60d"] = total
-
-        fetched_raw += len(results)
-
-        # Mantém apenas pedidos cujo envio ainda está pendente
-        PENDING_SHIPPING = {"pending", "ready_to_ship", "handling", "to_be_agreed", None, ""}
-        for order in results:
-            ship_status = (order.get("shipping") or {}).get("status", "")
-            if ship_status in PENDING_SHIPPING:
-                all_orders.append(order)
-
-        offset += limit
-        if offset >= total or not results:
-            break
-
-    debug_info["fetched_raw"]    = fetched_raw
-    debug_info["pending_orders"] = len(all_orders)
-    st.session_state["_debug"]   = debug_info
-    return all_orders
-
-
-def aggregate(orders):
-    """Agrupa por SKU/variação e separa em hoje vs próximos dias."""
-    agg = defaultdict(lambda: {
-        "Produto": "", "Variação": "", "SKU": "",
-        "item_id": "", "variation_id": None,
-        "hoje_un": 0,    "hoje_ped": 0,
-        "proximos_un": 0, "proximos_ped": 0,
-    })
-
-    for order in orders:
-        period = classify_order(order)
-        for item in order.get("order_items", []):
-            d   = item.get("item", {})
-            vid = d.get("variation_id")
-            key = (d.get("id", ""), vid or "sem")
-            attrs = d.get("variation_attributes", [])
-            var   = ", ".join(
-                f"{a['name']}: {a['value_name']}"
-                for a in attrs if a.get("value_name")
-            ) or "Padrão"
-
-            agg[key].update({
-                "Produto":      d.get("title", ""),
-                "Variação":     var,
-                "SKU":          d.get("seller_sku") or "",
-                "item_id":      d.get("id", ""),
-                "variation_id": vid,
-            })
-
-            qty = item.get("quantity", 0)
-            if period == "hoje":
-                agg[key]["hoje_un"]  += qty
-                agg[key]["hoje_ped"] += 1
-            else:
-                agg[key]["proximos_un"]  += qty
-                agg[key]["proximos_ped"] += 1
-
-    result = []
-    for v in agg.values():
-        v["total_un"]  = v["hoje_un"]  + v["proximos_un"]
-        v["total_ped"] = v["hoje_ped"] + v["proximos_ped"]
-        result.append(v)
-
-    # Ordena: hoje primeiro, depois por total de unidades
-    return sorted(result, key=lambda x: (-(x["hoje_un"]), -(x["total_un"])))
-
-
-# ─────────────────────────────────────────────
-# Caixas — persistência em arquivo JSON
-# ─────────────────────────────────────────────
-
-def load_boxes():
-    if os.path.exists(BOXES_FILE):
-        with open(BOXES_FILE) as f:
-            return json.load(f)
-    return {}
-
-
-def save_boxes(config: dict):
-    existing = load_boxes()
-    existing.update(config)
-    with open(BOXES_FILE, "w") as f:
-        json.dump(existing, f, ensure_ascii=False, indent=2)
-
-
-# ─────────────────────────────────────────────
-# OAuth: captura code na URL
-# ─────────────────────────────────────────────
-
-params = st.query_params
-if "code" in params and "access_token" not in st.session_state:
-    with st.spinner("Conectando ao Mercado Livre..."):
-        data = exchange_code_for_token(params["code"])
-    if data and data.get("access_token"):
-        st.session_state["access_token"]  = data["access_token"]
-        st.session_state["refresh_token"] = data.get("refresh_token", "")
-        st.query_params.clear()
-        st.rerun()
-    else:
-        st.error(f"Erro ao obter token: {data}")
-        st.stop()
-
-# ─────────────────────────────────────────────
-# HEADER
-# ─────────────────────────────────────────────
-
+# ── Header ─────────────────────────────────────────────────
 st.markdown("""
-<div class="main-header">
-  <h1>🛒 ML Compras</h1>
-  <p>Dashboard de reposição de estoque — Mercado Livre</p>
+<div style='background:#FFE600;padding:0.85rem 1.5rem;display:flex;align-items:center;gap:12px'>
+  <div style='background:#0d0d0d;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center'>
+    <span style='color:#FFE600;font-size:16px'>✔</span>
+  </div>
+  <span style='font-size:19px;font-weight:700;color:#0d0d0d'>Painel de Anúncios</span>
+  <span style='font-size:13px;color:#555'>Mercado Livre Analytics</span>
 </div>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# LOGIN
-# ─────────────────────────────────────────────
+# ── OAuth flow ─────────────────────────────────────────────
+params = st.query_params
+
+if "code" in params and "access_token" not in st.session_state:
+    with st.spinner("Autenticando..."):
+        try:
+            token_data = exchange_code(params["code"])
+            st.session_state["access_token"]  = token_data["access_token"]
+            st.session_state["refresh_token"] = token_data.get("refresh_token", "")
+            st.query_params.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Erro na autenticação: {e}")
+            st.stop()
 
 if "access_token" not in st.session_state:
-    st.markdown("### 🔐 Conecte sua conta")
-    st.markdown("Clique no botão abaixo para autorizar o acesso aos seus pedidos.")
     auth_url = (
-        f"{ML_AUTH_URL}?response_type=code"
-        f"&client_id={ML_APP_ID}"
-        f"&redirect_uri={REDIRECT_URI}"
+        f"https://auth.mercadolivre.com.br/authorization"
+        f"?response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}"
     )
-    st.link_button("🛒  Entrar com Mercado Livre", auth_url)
+    st.markdown(f"""
+    <div class="login-box">
+      <div style='font-size:48px;margin-bottom:1rem'>🛒</div>
+      <h2>Painel de Anúncios</h2>
+      <p>Faça login com sua conta do Mercado Livre<br>para visualizar e analisar seus anúncios.</p>
+      <a href="{auth_url}" class="btn-login" target="_self">🔑 Entrar com Mercado Livre</a>
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
-# ─────────────────────────────────────────────
-# DASHBOARD
-# ─────────────────────────────────────────────
-
-col_title, col_btn = st.columns([6, 1])
-with col_btn:
-    if st.button("↻ Atualizar"):
+# Renovar token se necessário
+access_token = st.session_state["access_token"]
+test = requests.get(
+    "https://api.mercadolibre.com/users/me",
+    headers={"Authorization": f"Bearer {access_token}"}, timeout=10
+)
+if test.status_code == 401 and st.session_state.get("refresh_token"):
+    try:
+        new_tokens = refresh_token_fn(st.session_state["refresh_token"])
+        st.session_state["access_token"]  = new_tokens["access_token"]
+        st.session_state["refresh_token"] = new_tokens.get("refresh_token", st.session_state["refresh_token"])
+        access_token = st.session_state["access_token"]
         st.cache_data.clear()
-    if st.button("Sair", type="secondary"):
+    except:
         del st.session_state["access_token"]
         st.rerun()
 
-with st.spinner("Carregando pedidos..."):
-    seller_id = get_seller_id()
-    if not seller_id:
-        st.error("Não foi possível conectar. Token inválido — faça login novamente.")
-        if st.button("Fazer login novamente"):
-            del st.session_state["access_token"]
-            st.rerun()
+# ── Carregar dados ─────────────────────────────────────────
+with st.spinner("Carregando seus anúncios..."):
+    try:
+        nickname, listings = load_listings(access_token)
+    except Exception as e:
+        st.error(f"Erro: {e}")
         st.stop()
 
-    orders = fetch_orders(seller_id)
-    items  = aggregate(orders)
+total    = len(listings)
+no_sales = [l for l in listings if (l.get("sold_quantity") or 0) == 0]
+w_sales  = [l for l in listings if (l.get("sold_quantity") or 0) > 0]
+active   = [l for l in listings if l.get("status") == "active"]
+paused   = [l for l in listings if l.get("status") == "paused"]
+closed   = [l for l in listings if l.get("status") == "closed"]
+now_str  = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-# ─── Totais para os cards ─────────────────────
-hoje_ped     = sum(i["hoje_ped"]     for i in items)
-hoje_un      = sum(i["hoje_un"]      for i in items)
-proximos_ped = sum(i["proximos_ped"] for i in items)
-proximos_un  = sum(i["proximos_un"]  for i in items)
-total_ped    = hoje_ped + proximos_ped
-total_un     = hoje_un  + proximos_un
+# View selecionada via query param (definida pelos cards clicáveis)
+current_view = st.query_params.get("view", "todos")
 
-# ─── Cards de resumo ──────────────────────────
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("🔴 Envios de hoje",    f"{hoje_ped} pedidos",    f"{hoje_un} un.")
-c2.metric("🔵 Próximos dias",     f"{proximos_ped} pedidos", f"{proximos_un} un.")
-c3.metric("🏷️ SKUs distintos",   len(items))
-c4.metric("📦 Total de pedidos",  total_ped, f"{total_un} un. no total")
-
-# ─── Debug sempre visível para diagnóstico ────
-if "_debug" in st.session_state:
-    with st.expander("🔍 Diagnóstico da API (remover depois)", expanded=(total_ped == 0)):
-        st.json(st.session_state["_debug"])
-
-if not items:
-    st.success("✅ Nenhum pedido pendente para enviar no momento.")
-    st.stop()
-
-st.divider()
-
-# ─────────────────────────────────────────────
-# TABELA POR SKU
-# ─────────────────────────────────────────────
-
-st.subheader("📦 Produtos a enviar por SKU")
-st.caption("🔴 **Hoje** = pedidos antigos que precisam sair agora  |  🔵 **Próximos dias** = pedidos recentes ainda no prazo  |  Preencha **Un./Caixa** para calcular compras.")
-
-boxes_cfg = load_boxes()
-
-rows = []
-for item in items:
-    key      = f"{item['item_id']}_{item['variation_id'] or 'sem'}"
-    un_caixa = int(boxes_cfg.get(key, 0))
-    rows.append({
-        "Produto":        item["Produto"],
-        "Variacao":       item["Variação"],
-        "SKU":            item["SKU"],
-        "Hoje":           item["hoje_un"],
-        "Proximos dias":  item["proximos_un"],
-        "Total":          item["total_un"],
-        "Un./Caixa":      un_caixa,
-        "_key":           key,
-    })
-
-df = pd.DataFrame(rows) if rows else pd.DataFrame(
-    columns=["Produto", "Variacao", "SKU", "Hoje", "Proximos dias", "Total", "Un./Caixa", "_key"]
-)
-
-edited = st.data_editor(
-    df[["Produto", "Variacao", "SKU", "Hoje", "Proximos dias", "Total", "Un./Caixa"]],
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Produto":       st.column_config.TextColumn("Produto", width="large", disabled=True),
-        "Variacao":      st.column_config.TextColumn("Variação", disabled=True),
-        "SKU":           st.column_config.TextColumn("SKU", disabled=True),
-        "Hoje":          st.column_config.NumberColumn("🔴 Hoje (un.)", disabled=True, width="small"),
-        "Proximos dias": st.column_config.NumberColumn("🔵 Próx. dias (un.)", disabled=True, width="small"),
-        "Total":         st.column_config.NumberColumn("Total (un.)", disabled=True, width="small"),
-        "Un./Caixa":     st.column_config.NumberColumn("Un./Caixa", min_value=0, step=1,
-                                                        help="Quantas unidades vêm por caixa?"),
-    },
-    num_rows="fixed",
-    key="tabela_produtos",
-)
-
-# Salva Un./Caixa
-new_boxes = {}
-for i, row in edited.iterrows():
-    key = df.at[i, "_key"]
-    val = int(row["Un./Caixa"] or 0)
-    if val > 0:
-        new_boxes[key] = val
-if new_boxes:
-    save_boxes(new_boxes)
-
-# ─────────────────────────────────────────────
-# RESUMO DE COMPRAS
-# ─────────────────────────────────────────────
-
-st.divider()
-st.subheader("🛒 Resumo de compras")
-
-resultado = []
-for i, row in edited.iterrows():
-    un_caixa = int(row["Un./Caixa"] or 0)
-    total    = int(row["Total"])
-    if un_caixa > 0:
-        caixas   = math.ceil(total / un_caixa)
-        inteiras = total // un_caixa
-        resto    = total % un_caixa
-        detalhe  = f"{inteiras} cx completa(s)" + (f" + {resto} avulsas" if resto else " ✓ exato")
-        resultado.append({
-            "Produto":          row["Produto"],
-            "Variação":         row["Variacao"],
-            "SKU":              row["SKU"],
-            "🔴 Hoje":          int(row["Hoje"]),
-            "🔵 Próx. dias":    int(row["Proximos dias"]),
-            "Total un.":        total,
-            "Un./Caixa":        un_caixa,
-            "Caixas a comprar": caixas,
-            "Detalhe":          detalhe,
-        })
-
-if resultado:
-    df_res = pd.DataFrame(resultado)
-    st.dataframe(
-        df_res,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Produto":          st.column_config.TextColumn(width="large"),
-            "Caixas a comprar": st.column_config.NumberColumn(width="small"),
-        }
+# Barra de usuário + botão sair
+col_a, col_b = st.columns([6, 1])
+with col_a:
+    st.markdown(
+        f"<div style='font-size:13px;color:#aaa;padding:0.4rem 0;background:#111;"
+        f"border-bottom:1px solid #2e2e2e;padding-left:1rem'>"
+        f"Conectado como <strong style='color:#FFE600'>{nickname}</strong> · {now_str}</div>",
+        unsafe_allow_html=True
     )
+with col_b:
+    if st.button("🚪 Sair"):
+        for k in ["access_token", "refresh_token"]:
+            st.session_state.pop(k, None)
+        st.cache_data.clear()
+        st.query_params.clear()
+        st.rerun()
+
+# ── Cards clicáveis de métricas ────────────────────────────
+def card_style(view_key):
+    if current_view == view_key:
+        return "background:#1e1c00;border:2px solid #FFE600;border-radius:12px;padding:1.1rem 1rem;cursor:pointer;transition:all 0.15s;user-select:none;"
+    return "background:#1a1a1a;border:1px solid #2e2e2e;border-radius:12px;padding:1.1rem 1rem;cursor:pointer;transition:all 0.15s;user-select:none;"
+
+st.components.v1.html(f"""
+<style>
+  body {{ margin:0; padding:0; background:#0d0d0d; }}
+  .mgrid {{ display:grid; grid-template-columns:repeat(6,1fr); gap:12px; padding:12px 0 4px 0; }}
+  .mcard {{ border-radius:12px; padding:1.1rem 1rem; cursor:pointer; transition:all 0.15s; user-select:none; }}
+  .mcard:hover {{ filter:brightness(1.15); }}
+  .mlabel {{ font-size:12px; color:#ccc; margin-bottom:6px; font-family:sans-serif; }}
+  .mvalue {{ font-size:30px; font-weight:700; font-family:sans-serif; }}
+  .c-yellow {{ color:#FFE600; }}
+  .c-red    {{ color:#ef5350; }}
+  .c-green  {{ color:#66bb6a; }}
+  .c-orange {{ color:#ffa726; }}
+  .inactive {{ background:#1a1a1a; border:1px solid #2e2e2e; }}
+  .active   {{ background:#1e1c00; border:2px solid #FFE600; }}
+</style>
+<div class="mgrid">
+  <div class="mcard {'active' if current_view == 'todos' else 'inactive'}" onclick="setView('todos')">
+    <div class="mlabel">Total de anúncios</div>
+    <div class="mvalue c-yellow">{total}</div>
+  </div>
+  <div class="mcard {'active' if current_view == 'sem_venda' else 'inactive'}" onclick="setView('sem_venda')">
+    <div class="mlabel">Sem nenhuma venda</div>
+    <div class="mvalue c-red">{len(no_sales)}</div>
+  </div>
+  <div class="mcard {'active' if current_view == 'com_venda' else 'inactive'}" onclick="setView('com_venda')">
+    <div class="mlabel">Com vendas</div>
+    <div class="mvalue c-green">{len(w_sales)}</div>
+  </div>
+  <div class="mcard {'active' if current_view == 'ativos' else 'inactive'}" onclick="setView('ativos')">
+    <div class="mlabel">Ativos</div>
+    <div class="mvalue c-green">{len(active)}</div>
+  </div>
+  <div class="mcard {'active' if current_view == 'pausados' else 'inactive'}" onclick="setView('pausados')">
+    <div class="mlabel">Pausados</div>
+    <div class="mvalue c-orange">{len(paused)}</div>
+  </div>
+  <div class="mcard {'active' if current_view == 'fechados' else 'inactive'}" onclick="setView('fechados')">
+    <div class="mlabel">Fechados</div>
+    <div class="mvalue c-red">{len(closed)}</div>
+  </div>
+</div>
+<script>
+function setView(v) {{
+  try {{
+    var url = new URL(window.top.location.href);
+    url.searchParams.set('view', v);
+    window.top.location.href = url.toString();
+  }} catch(e) {{
+    try {{
+      var a = document.createElement('a');
+      a.href = window.top.location.pathname + '?view=' + v;
+      a.target = '_top';
+      document.body.appendChild(a);
+      a.click();
+    }} catch(e2) {{
+      window.location.href = '?view=' + v;
+    }}
+  }}
+}}
+</script>
+""", height=130)
+
+# ── Gráficos ───────────────────────────────────────────────
+age_bins = [0, 0, 0, 0]
+for l in listings:
+    d = age_days(l.get("date_created", ""))
+    if d < 30:    age_bins[0] += 1
+    elif d < 180: age_bins[1] += 1
+    elif d < 365: age_bins[2] += 1
+    else:         age_bins[3] += 1
+
+st.components.v1.html(f"""
+<div style="background:#0d0d0d;padding:4px 0 8px 0">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <div style="background:#1a1a1a;border-radius:12px;border:1px solid #2e2e2e;padding:1.25rem">
+    <div style="font-size:13px;color:#888;font-weight:600;margin-bottom:1rem">Status dos anúncios</div>
+    <canvas id="cStatus" style="max-height:190px"></canvas>
+  </div>
+  <div style="background:#1a1a1a;border-radius:12px;border:1px solid #2e2e2e;padding:1.25rem">
+    <div style="font-size:13px;color:#888;font-weight:600;margin-bottom:1rem">Anúncios por idade</div>
+    <canvas id="cAge" style="max-height:190px"></canvas>
+  </div>
+</div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+Chart.defaults.color = '#888';
+new Chart(document.getElementById('cStatus'), {{
+  type: 'doughnut',
+  data: {{ labels: ['Ativos','Pausados','Fechados'],
+    datasets: [{{ data: [{len(active)},{len(paused)},{len(closed)}],
+      backgroundColor: ['#66bb6a','#ffa726','#ef5350'], borderWidth: 0 }}] }},
+  options: {{ responsive: true, maintainAspectRatio: true,
+    plugins: {{ legend: {{ position: 'right', labels: {{ color:'#bbb', font:{{size:12}}, boxWidth:12 }} }} }} }}
+}});
+new Chart(document.getElementById('cAge'), {{
+  type: 'bar',
+  data: {{ labels: ['< 1 mês','1-6 meses','6-12 meses','> 1 ano'],
+    datasets: [{{ data: {age_bins},
+      backgroundColor: ['#FFE600','#c9b800','#9e8f00','#6e6300'], borderRadius: 6 }}] }},
+  options: {{ responsive: true, maintainAspectRatio: true,
+    plugins: {{ legend: {{ display: false }} }},
+    scales: {{
+      y: {{ beginAtZero:true, ticks:{{stepSize:1,font:{{size:11}},color:'#888'}}, grid:{{color:'#222'}} }},
+      x: {{ ticks:{{font:{{size:11}},color:'#888'}}, grid:{{color:'#222'}} }}
+    }}
+  }}
+}});
+</script>
+""", height=275)
+
+# ── Tabela da view selecionada ─────────────────────────────
+view_config = {
+    "todos":     ("📋 Todos os anúncios",       listings,  0),
+    "sem_venda": ("🔴 Sem nenhuma venda",        no_sales,  2),
+    "com_venda": ("🟢 Com vendas",               w_sales,   0),
+    "ativos":    ("✅ Ativos",                   active,    0),
+    "pausados":  ("⏸️ Pausados",                paused,    0),
+    "fechados":  ("🚫 Fechados",                 closed,    1),
+}
+
+title, dados_view, default_sort = view_config.get(current_view, view_config["todos"])
+
+st.markdown(f"<div class='section-title'>{title} &nbsp;({len(dados_view)})</div>", unsafe_allow_html=True)
+
+# Controles: busca + ordenação (+ filtros extras por view)
+if current_view == "todos":
+    c1, c2, c3 = st.columns([2, 3, 2])
+    with c1:
+        filtro = st.selectbox("Status", ["Todos", "Ativos", "Pausados", "Fechados"],
+                              label_visibility="collapsed", key="filtro_status")
+        if filtro == "Ativos":     dados_view = active
+        elif filtro == "Pausados": dados_view = paused
+        elif filtro == "Fechados": dados_view = closed
+    with c2:
+        busca = st.text_input("Buscar", placeholder="🔍  Buscar por título...",
+                              label_visibility="collapsed", key="busca_todos")
+        if busca:
+            dados_view = [l for l in dados_view if busca.lower() in l.get("title","").lower()]
+    with c3:
+        ordem = st.selectbox("Ordenar", SORT_OPTIONS, index=default_sort,
+                             label_visibility="collapsed", key="ord_todos")
+
+elif current_view == "sem_venda":
+    # Filtro de período exclusivo para anúncios sem venda
+    PERIODO_OPTS = {
+        "⏱️ Todos os períodos": 0,
+        "📅 Mais de 15 dias":   15,
+        "📅 Mais de 30 dias":   30,
+        "📅 Mais de 60 dias":   60,
+        "📅 Mais de 90 dias":   90,
+    }
+    c1, c2, c3 = st.columns([2, 3, 2])
+    with c1:
+        periodo_label = st.selectbox(
+            "Período sem venda", list(PERIODO_OPTS.keys()),
+            label_visibility="collapsed", key="filtro_periodo"
+        )
+        min_dias = PERIODO_OPTS[periodo_label]
+        if min_dias > 0:
+            dados_view = [l for l in dados_view if age_days(l.get("date_created","")) >= min_dias]
+    with c2:
+        busca = st.text_input("Buscar", placeholder="🔍  Buscar por título...",
+                              label_visibility="collapsed", key="busca_view")
+        if busca:
+            dados_view = [l for l in dados_view if busca.lower() in l.get("title","").lower()]
+    with c3:
+        ordem = st.selectbox("Ordenar", SORT_OPTIONS, index=default_sort,
+                             label_visibility="collapsed", key="ord_view")
+
+    # Resumo do filtro aplicado
+    if min_dias > 0:
+        st.markdown(
+            f"<div style='font-size:12px;color:#ffa726;padding:4px 0 8px'>"
+            f"🔎 Mostrando {len(dados_view)} anúncio(s) com mais de {min_dias} dias sem nenhuma venda.</div>",
+            unsafe_allow_html=True
+        )
+
 else:
-    st.info("Preencha a coluna **Un./Caixa** na tabela acima para ver o resumo de compras.")
+    c1, c2 = st.columns([4, 1])
+    with c1:
+        busca = st.text_input("Buscar", placeholder="🔍  Buscar por título...",
+                              label_visibility="collapsed", key="busca_view")
+        if busca:
+            dados_view = [l for l in dados_view if busca.lower() in l.get("title","").lower()]
+    with c2:
+        ordem = st.selectbox("Ordenar", SORT_OPTIONS, index=default_sort,
+                             label_visibility="collapsed", key="ord_view")
+
+render_table(sort_data(dados_view, ordem))
+
+st.markdown(
+    f"<div style='text-align:center;font-size:12px;color:#444;padding:1.5rem'>Painel ML · {now_str}</div>",
+    unsafe_allow_html=True
+)
