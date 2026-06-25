@@ -125,15 +125,30 @@ def get_seller_id():
 
 def fetch_orders(seller_id):
     all_orders = []
-    for status in ["ready_to_ship", "payment_done"]:
+    debug_info = {}
+    for status in ["ready_to_ship", "payment_done", "paid", "handling"]:
         offset, limit = 0, 50
-        while True:
+        resp = ml_get("/orders/search", {
+            "seller": seller_id,
+            "order.status": status,
+            "limit": limit,
+            "offset": offset,
+            "sort": "date_desc",
+        })
+        debug_info[status] = {"status_code": resp.status_code, "body": resp.json()}
+        if not resp.ok:
+            continue
+        data    = resp.json()
+        results = data.get("results", [])
+        all_orders.extend(results)
+        total  = data.get("paging", {}).get("total", 0)
+        offset += limit
+        while offset < total and results:
             resp = ml_get("/orders/search", {
                 "seller": seller_id,
                 "order.status": status,
                 "limit": limit,
                 "offset": offset,
-                "sort": "date_desc",
             })
             if not resp.ok:
                 break
@@ -142,8 +157,8 @@ def fetch_orders(seller_id):
             all_orders.extend(results)
             total  = data.get("paging", {}).get("total", 0)
             offset += limit
-            if offset >= total or not results:
-                break
+    # Guarda debug na sessão
+    st.session_state["_debug"] = debug_info
     return all_orders
 
 
@@ -252,16 +267,15 @@ with col_btn:
         del st.session_state["access_token"]
         st.rerun()
 
-@st.cache_data(ttl=300, show_spinner="Buscando pedidos no Mercado Livre...")
 def get_data():
     sid = get_seller_id()
     if not sid:
-        return None, []
+        return None, [], {}
     orders = fetch_orders(sid)
     items  = aggregate(orders)
-    return len(orders), items
+    return len(orders), items, st.session_state.get("_debug", {})
 
-total_orders, items = get_data()
+total_orders, items, debug = get_data()
 
 if total_orders is None:
     st.error("Não foi possível conectar. Token inválido — faça login novamente.")
@@ -276,6 +290,13 @@ c1, c2, c3 = st.columns(3)
 c1.metric("📦 Pedidos a enviar",   total_orders)
 c2.metric("🏷️ Produtos distintos", len(items))
 c3.metric("📊 Total de unidades",  total_units)
+
+# Debug temporário — mostra resposta da API
+if total_orders == 0 and debug:
+    with st.expander("🔍 Diagnóstico da API (remover depois)"):
+        for status, info in debug.items():
+            st.write(f"**{status}** → HTTP {info['status_code']}")
+            st.json(info["body"])
 
 st.divider()
 
