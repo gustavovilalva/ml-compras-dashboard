@@ -129,31 +129,54 @@ def classify_order(order):
 
 
 def fetch_orders(seller_id):
-    """Busca APENAS pedidos com status ready_to_ship (prontos para enviar)."""
+    """Busca pedidos pendentes de envio: ready_to_ship e handling."""
     all_orders = []
-    offset, limit = 0, 50
+    debug_info = {}
 
-    while True:
+    # Busca os dois status que cobrem "aguardando envio"
+    for status in ["ready_to_ship", "handling"]:
+        offset, limit = 0, 50
+        status_orders = []
+
         resp = ml_get("/orders/search", {
             "seller": seller_id,
-            "order.status": "ready_to_ship",
+            "order.status": status,
             "limit": limit,
             "offset": offset,
-            "sort": "date_asc",   # mais antigos primeiro = mais urgentes
+            "sort": "date_desc",
         })
-        if not resp.ok:
-            st.session_state["_debug"] = {"status_code": resp.status_code, "body": resp.json()}
-            break
-        data = resp.json()
-        results = data.get("results", [])
-        if not results:
-            break
-        all_orders.extend(results)
-        total  = data.get("paging", {}).get("total", 0)
-        offset += limit
-        if offset >= total:
-            break
+        debug_info[status] = {"status_code": resp.status_code}
 
+        if not resp.ok:
+            debug_info[status]["body"] = resp.json()
+            continue
+
+        data    = resp.json()
+        results = data.get("results", [])
+        total   = data.get("paging", {}).get("total", 0)
+        debug_info[status]["total"] = total
+        status_orders.extend(results)
+        offset += limit
+
+        while offset < total and results:
+            resp = ml_get("/orders/search", {
+                "seller": seller_id,
+                "order.status": status,
+                "limit": limit,
+                "offset": offset,
+                "sort": "date_desc",
+            })
+            if not resp.ok:
+                break
+            data    = resp.json()
+            results = data.get("results", [])
+            status_orders.extend(results)
+            total  = data.get("paging", {}).get("total", 0)
+            offset += limit
+
+        all_orders.extend(status_orders)
+
+    st.session_state["_debug"] = debug_info
     return all_orders
 
 
@@ -304,14 +327,14 @@ c2.metric("🔵 Próximos dias",     f"{proximos_ped} pedidos", f"{proximos_un} 
 c3.metric("🏷️ SKUs distintos",   len(items))
 c4.metric("📦 Total de pedidos",  total_ped, f"{total_un} un. no total")
 
+# ─── Debug sempre visível para diagnóstico ────
+if "_debug" in st.session_state:
+    with st.expander("🔍 Diagnóstico da API (remover depois)", expanded=(total_ped == 0)):
+        st.json(st.session_state["_debug"])
+
 if not items:
     st.success("✅ Nenhum pedido pendente para enviar no momento.")
     st.stop()
-
-# ─── Debug se debug existir ───────────────────
-if "_debug" in st.session_state and total_ped == 0:
-    with st.expander("🔍 Diagnóstico da API"):
-        st.json(st.session_state["_debug"])
 
 st.divider()
 
