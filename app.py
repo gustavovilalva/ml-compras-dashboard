@@ -128,7 +128,8 @@ def fetch_orders(seller_id):
     debug_info = {}
     for status in ["ready_to_ship", "payment_done", "paid", "handling"]:
         offset, limit = 0, 50
-        resp = ml_get(f"/users/{seller_id}/orders/search", {
+        resp = ml_get("/orders/search", {
+            "seller": seller_id,
             "order.status": status,
             "limit": limit,
             "offset": offset,
@@ -143,7 +144,8 @@ def fetch_orders(seller_id):
         total  = data.get("paging", {}).get("total", 0)
         offset += limit
         while offset < total and results:
-            resp = ml_get(f"/users/{seller_id}/orders/search", {
+            resp = ml_get("/orders/search", {
+                "seller": seller_id,
                 "order.status": status,
                 "limit": limit,
                 "offset": offset,
