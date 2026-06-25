@@ -281,14 +281,29 @@ if "access_token" not in st.session_state:
         f"https://auth.mercadolivre.com.br/authorization"
         f"?response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}"
     )
-    st.markdown(f"""
+    st.components.v1.html(f"""
+    <style>
+      body {{ margin:0; padding:0; background:#0d0d0d; display:flex; align-items:center; justify-content:center; min-height:80vh; }}
+      .login-box {{
+        max-width:420px; background:#1a1a1a; border-radius:16px;
+        border:1px solid #2e2e2e; padding:2.5rem; text-align:center; font-family:sans-serif;
+      }}
+      .login-box h2 {{ font-size:20px; font-weight:700; margin-bottom:8px; color:#f0f0f0; }}
+      .login-box p  {{ font-size:13px; color:#aaa; margin-bottom:2rem; line-height:1.6; }}
+      .btn-login {{
+        display:inline-block; background:#FFE600; color:#0d0d0d;
+        font-weight:700; font-size:15px; padding:13px 36px;
+        border-radius:8px; text-decoration:none; cursor:pointer;
+      }}
+      .btn-login:hover {{ background:#e6cf00; }}
+    </style>
     <div class="login-box">
-      <div style='font-size:48px;margin-bottom:1rem'>🛒</div>
+      <div style="font-size:52px;margin-bottom:1rem">🛒</div>
       <h2>Painel de Anúncios</h2>
       <p>Faça login com sua conta do Mercado Livre<br>para visualizar e analisar seus anúncios.</p>
-      <a href="{auth_url}" class="btn-login" target="_self">🔑 Entrar com Mercado Livre</a>
+      <a href="{auth_url}" class="btn-login" target="_top">🔑 Entrar com Mercado Livre</a>
     </div>
-    """, unsafe_allow_html=True)
+    """, height=380)
     st.stop()
 
 # Renovar token se necessário
