@@ -304,15 +304,27 @@ for item in items:
     })
 
 import pandas as pd
-df = pd.DataFrame(rows)
+
+COLS = ["Produto", "Variacao", "SKU", "Pedidos", "Unidades", "Un./Caixa"]
+
+# Renomeia chave com acento para evitar KeyError em algumas versões do pandas
+for r in rows:
+    r["Variacao"] = r.pop("Variação")
+
+df = pd.DataFrame(rows, columns=["Produto", "Variacao", "SKU", "Pedidos", "Unidades", "Un./Caixa", "_key"]) \
+    if rows else pd.DataFrame(columns=["Produto", "Variacao", "SKU", "Pedidos", "Unidades", "Un./Caixa", "_key"])
+
+if df.empty:
+    st.info("✅ Nenhum pedido pendente para enviar no momento.")
+    st.stop()
 
 edited = st.data_editor(
-    df[["Produto", "Variação", "SKU", "Pedidos", "Unidades", "Un./Caixa"]],
+    df[["Produto", "Variacao", "SKU", "Pedidos", "Unidades", "Un./Caixa"]],
     use_container_width=True,
     hide_index=True,
     column_config={
         "Produto":   st.column_config.TextColumn("Produto", width="large", disabled=True),
-        "Variação":  st.column_config.TextColumn("Variação", disabled=True),
+        "Variacao":  st.column_config.TextColumn("Variação", disabled=True),
         "SKU":       st.column_config.TextColumn("SKU", disabled=True),
         "Pedidos":   st.column_config.NumberColumn("Pedidos", disabled=True),
         "Unidades":  st.column_config.NumberColumn("Unidades", disabled=True),
