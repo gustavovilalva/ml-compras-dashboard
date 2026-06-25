@@ -129,54 +129,58 @@ def classify_order(order):
 
 
 def fetch_orders(seller_id):
-    """Busca pedidos pendentes de envio: ready_to_ship e handling."""
-    all_orders = []
-    debug_info = {}
+    """
+    Busca pedidos pagos dos últimos 60 dias e filtra apenas os
+    que ainda não foram enviados (shipping.status pendente/ready).
+    """
+    all_orders   = []
+    debug_info   = {}
 
-    # Busca os dois status que cobrem "aguardando envio"
-    for status in ["ready_to_ship", "handling"]:
-        offset, limit = 0, 50
-        status_orders = []
+    # Últimos 60 dias (cobre todos os pedidos pendentes de envio)
+    date_from = (datetime.now(timezone.utc) - timedelta(days=60)).strftime(
+        "%Y-%m-%dT00:00:00.000-00:00"
+    )
 
+    offset, limit = 0, 50
+    fetched_raw   = 0
+
+    while True:
         resp = ml_get("/orders/search", {
-            "seller": seller_id,
-            "order.status": status,
-            "limit": limit,
-            "offset": offset,
-            "sort": "date_desc",
+            "seller":                  seller_id,
+            "order.status":            "paid",
+            "order.date_created.from": date_from,
+            "limit":                   limit,
+            "offset":                  offset,
+            "sort":                    "date_desc",
         })
-        debug_info[status] = {"status_code": resp.status_code}
 
         if not resp.ok:
-            debug_info[status]["body"] = resp.json()
-            continue
+            debug_info["error"] = {"status_code": resp.status_code, "body": resp.json()}
+            break
 
         data    = resp.json()
         results = data.get("results", [])
         total   = data.get("paging", {}).get("total", 0)
-        debug_info[status]["total"] = total
-        status_orders.extend(results)
+
+        if offset == 0:
+            debug_info["total_paid_60d"] = total
+
+        fetched_raw += len(results)
+
+        # Mantém apenas pedidos cujo envio ainda está pendente
+        PENDING_SHIPPING = {"pending", "ready_to_ship", "handling", "to_be_agreed", None, ""}
+        for order in results:
+            ship_status = (order.get("shipping") or {}).get("status", "")
+            if ship_status in PENDING_SHIPPING:
+                all_orders.append(order)
+
         offset += limit
+        if offset >= total or not results:
+            break
 
-        while offset < total and results:
-            resp = ml_get("/orders/search", {
-                "seller": seller_id,
-                "order.status": status,
-                "limit": limit,
-                "offset": offset,
-                "sort": "date_desc",
-            })
-            if not resp.ok:
-                break
-            data    = resp.json()
-            results = data.get("results", [])
-            status_orders.extend(results)
-            total  = data.get("paging", {}).get("total", 0)
-            offset += limit
-
-        all_orders.extend(status_orders)
-
-    st.session_state["_debug"] = debug_info
+    debug_info["fetched_raw"]    = fetched_raw
+    debug_info["pending_orders"] = len(all_orders)
+    st.session_state["_debug"]   = debug_info
     return all_orders
 
 
